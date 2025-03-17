@@ -36,23 +36,22 @@ fastify.get("/", async (_, reply) => {
   reply.send({ message: "Server is running" });
 });
 
-// Route to handle incoming calls from Twilio, now including lead details in the query parameters
+// Route to handle incoming calls from Twilio,
+// including lead details (name, email, phone) as query parameters.
 fastify.all("/incoming-call-eleven", async (request, reply) => {
-  // Get the lead details from query parameters if provided
   const { name, email, phone } = request.query;
   const params = new URLSearchParams();
   if (name) params.append("name", name);
   if (email) params.append("email", email);
   if (phone) params.append("phone", phone);
-
   const queryString = params.toString();
-  // Generate TwiML response to connect the call to a WebSocket stream with query parameters
+
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-    <Response>
-      <Connect>
-        <Stream url="wss://${request.headers.host}/media-stream${queryString ? "?" + queryString : ""}" />
-      </Connect>
-    </Response>`;
+  <Response>
+    <Connect>
+      <Stream url="wss://${request.headers.host}/media-stream${queryString ? "?" + queryString : ""}" />
+    </Connect>
+  </Response>`;
 
   reply.type("text/xml").send(twimlResponse);
 });
@@ -67,12 +66,12 @@ fastify.register(async (fastifyInstance) => {
 
     let streamSid = null;
 
-    // Build query parameters for ElevenLabs WebSocket
+    // Build query parameters for ElevenLabs using the expected parameter names
     const elevenParams = new URLSearchParams({
       agent_id: ELEVENLABS_AGENT_ID,
-      ...(name && { name }),
-      ...(email && { email }),
-      ...(phone && { phone })
+      ...(name && { lead_name: name }),
+      ...(email && { lead_email: email }),
+      ...(phone && { lead_phone: phone })
     });
 
     // Connect to ElevenLabs Conversational AI WebSocket with lead details
@@ -172,21 +171,24 @@ fastify.register(async (fastifyInstance) => {
   });
 });
 
-// Route to initiate an outbound call with additional user information
+// Route to initiate an outbound call with additional user information.
+// The lead details are appended as query parameters to the webhook URL.
+// The "to" field now serves as both the destination phone and the lead phone.
 fastify.post("/make-outbound-call", async (request, reply) => {
-  const { to, name, email, phone } = request.body; // Destination phone number, user name, email, and phone
+  const { to, name, email } = request.body; // "to" is used as the phone number
 
-  // Validate that all required fields are provided
-  if (!to || !name || !email || !phone) {
-    return reply.status(400).send({ error: "Destination phone number, name, email, and phone are required" });
+  if (!to || !name || !email) {
+    return reply.status(400).send({ error: "Destination phone number, name, and email are required" });
   }
 
+  // Use the "to" field as the phone number for lead details.
+  const phone = to;
+
   try {
-    // Append name, email, and phone as query parameters to the webhook URL
     const callWebhookUrl = `https://${request.headers.host}/incoming-call-eleven?name=${encodeURIComponent(name)}&email=${encodeURIComponent(email)}&phone=${encodeURIComponent(phone)}`;
     
     const call = await twilioClient.calls.create({
-      url: callWebhookUrl, // Webhook for call handling with additional user info
+      url: callWebhookUrl,
       to: to,
       from: TWILIO_PHONE_NUMBER,
     });
