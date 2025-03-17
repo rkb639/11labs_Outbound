@@ -42,8 +42,6 @@ fastify.get("/", async (_, reply) => {
 // Route to handle incoming calls from Twilio
 fastify.all("/incoming-call-eleven", async (request, reply) => {
   const callSid = request.query.CallSid; // Get the CallSid from the query parameters
-  // Retrieve lead details using callSid
-  const leadName = callDetails[callSid]?.leadName;
 
   // Generate TwiML response to connect the call to a WebSocket stream
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
@@ -63,7 +61,7 @@ fastify.register(async (fastifyInstance) => {
 
     const url = new URL(req.url, `wss://${req.headers.host}`);
     const callSid = url.searchParams.get('callSid');
-    const leadName = callDetails[callSid]?.leadName;
+    const leadDetails = callDetails[callSid] || {};
 
     let streamSid = null;
     let elevenLabsWs; // Declare elevenLabsWs outside the onopen event
@@ -104,17 +102,34 @@ fastify.register(async (fastifyInstance) => {
     };
 
     connection.on("open", () => {
-      // Connect to ElevenLabs Conversational AI WebSocket
+      // Prepare agent state with lead details
+      const agentState = {};
+      
+      // Only add properties that exist
+      if (leadDetails.name) agentState.lead_name = leadDetails.name;
+      if (leadDetails.email) agentState.lead_email = leadDetails.email;
+      if (leadDetails.phone) agentState.lead_phone = leadDetails.phone;
+      
+      // Set custom query parameters for agent state
+      const queryParams = new URLSearchParams();
+      queryParams.append('agent_id', ELEVENLABS_AGENT_ID);
+      
+      // Add agent state as a query parameter if we have any details
+      if (Object.keys(agentState).length > 0) {
+        queryParams.append('agent_state', JSON.stringify(agentState));
+      }
+      
+      // Connect to ElevenLabs Conversational AI WebSocket with agent state
       elevenLabsWs = new WebSocket(
-        `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${ELEVENLABS_AGENT_ID}`
+        `wss://api.elevenlabs.io/v1/convai/conversation?${queryParams.toString()}`
       );
 
       elevenLabsWs.on("open", () => {
         console.log("[II] Connected to Conversational AI.");
-        // Send a personalized greeting to ElevenLabs if leadName is available
-        if (leadName) {
+        // Send a personalized greeting to ElevenLabs if lead name is available
+        if (leadDetails.name) {
           const greeting = {
-            text: `Hello, ${leadName}.`,
+            text: `Hello, ${leadDetails.name}.`,
             is_final: true,
           };
           if (elevenLabsWs.readyState === WebSocket.OPEN) {
@@ -191,7 +206,7 @@ fastify.register(async (fastifyInstance) => {
 
 // Route to initiate an outbound call
 fastify.post("/make-outbound-call", async (request, reply) => {
-  const { to, lead_name } = request.body; // Destination phone number and lead's name
+  const { to, name, email, phone } = request.body; // Get all lead details
 
   if (!to) {
     return reply.status(400).send({ error: "Destination phone number is required" });
@@ -207,9 +222,19 @@ fastify.post("/make-outbound-call", async (request, reply) => {
     });
 
     console.log(`Outbound call initiated: ${call.sid}`);
-    // Store lead details using callSid
-    callDetails[call.sid] = { leadName: lead_name };
-    reply.send({ message: "Call initiated", callSid: call.sid });
+    
+    // Store all lead details using callSid
+    callDetails[call.sid] = {
+      name: name,
+      email: email,
+      phone: phone || to // Use the 'to' number as fallback if no specific phone is provided
+    };
+    
+    reply.send({ 
+      message: "Call initiated", 
+      callSid: call.sid,
+      leadDetails: callDetails[call.sid] 
+    });
   } catch (error) {
     console.error("Error initiating call:", error);
     reply.status(500).send({ error: "Failed to initiate call" });
