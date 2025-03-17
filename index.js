@@ -16,10 +16,7 @@ const {
 } = process.env;
 
 // Check for the required environment variables
-if (!ELEVENLABS_AGENT_ID |
-| !TWILIO_ACCOUNT_SID |
-| !TWILIO_AUTH_TOKEN |
-| !TWILIO_PHONE_NUMBER) {
+if (!ELEVENLABS_AGENT_ID || !TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE_NUMBER) {
   console.error("Missing required environment variables");
   process.exit(1);
 }
@@ -32,8 +29,7 @@ fastify.register(fastifyWs);
 // Initialize Twilio client
 const twilioClient = Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
-const PORT = process.env.PORT |
-| 8000;
+const PORT = process.env.PORT || 8000;
 
 // Store lead details temporarily using callSid as the key
 const callDetails = {};
@@ -46,7 +42,8 @@ fastify.get("/", async (_, reply) => {
 // Route to handle incoming calls from Twilio
 fastify.all("/incoming-call-eleven", async (request, reply) => {
   const callSid = request.query.CallSid; // Get the CallSid from the query parameters
-  const leadName = callDetails?.leadName;
+  // Retrieve lead details using callSid
+  const leadName = callDetails[callSid]?.leadName;
 
   // Generate TwiML response to connect the call to a WebSocket stream
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
@@ -62,11 +59,11 @@ fastify.all("/incoming-call-eleven", async (request, reply) => {
 // WebSocket route for handling media streams from Twilio
 fastify.register(async (fastifyInstance) => {
   fastifyInstance.get("/media-stream", { websocket: true }, (connection, req) => {
-    console.info(" Twilio connected to media stream.");
+    console.info("Twilio connected to media stream.");
 
     const url = new URL(req.url, `wss://${req.headers.host}`);
     const callSid = url.searchParams.get('callSid');
-    const leadName = callDetails?.leadName;
+    const leadName = callDetails[callSid]?.leadName;
 
     let streamSid = null;
     let elevenLabsWs; // Declare elevenLabsWs outside the onopen event
@@ -150,7 +147,7 @@ fastify.register(async (fastifyInstance) => {
         switch (data.event) {
           case "start":
             streamSid = data.start.streamSid;
-            console.log(` Stream started with ID: ${streamSid}`);
+            console.log(`Stream started with ID: ${streamSid}`);
             break;
           case "media":
             if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
@@ -164,13 +161,13 @@ fastify.register(async (fastifyInstance) => {
             if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
               elevenLabsWs.close();
             }
-            delete callDetails; // Clean up call details
+            delete callDetails[callSid]; // Clean up call details for this callSid
             break;
           default:
-            console.log(` Received unhandled event: ${data.event}`);
+            console.log(`Received unhandled event: ${data.event}`);
         }
       } catch (error) {
-        console.error(" Error processing message:", error);
+        console.error("Error processing message:", error);
       }
     });
 
@@ -178,16 +175,16 @@ fastify.register(async (fastifyInstance) => {
       if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
         elevenLabsWs.close();
       }
-      delete callDetails; // Clean up call details
-      console.log(" Client disconnected");
+      delete callDetails[callSid]; // Clean up call details for this callSid
+      console.log("Client disconnected");
     });
 
     connection.on("error", (error) => {
-      console.error(" WebSocket error:", error);
+      console.error("WebSocket error:", error);
       if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
         elevenLabsWs.close();
       }
-      delete callDetails; // Clean up call details
+      delete callDetails[callSid]; // Clean up call details for this callSid
     });
   });
 });
@@ -209,19 +206,19 @@ fastify.post("/make-outbound-call", async (request, reply) => {
       statusCallback: `https://${request.headers.host}/call-status`, // Optional: Webhook for status updates
     });
 
-    console.log(` Outbound call initiated: ${call.sid}`);
+    console.log(`Outbound call initiated: ${call.sid}`);
     // Store lead details using callSid
     callDetails[call.sid] = { leadName: lead_name };
     reply.send({ message: "Call initiated", callSid: call.sid });
   } catch (error) {
-    console.error(" Error initiating call:", error);
+    console.error("Error initiating call:", error);
     reply.status(500).send({ error: "Failed to initiate call" });
   }
 });
 
 // Optional: Route to handle call status updates from Twilio
 fastify.post("/call-status", async (request, reply) => {
-  console.log("", request.body);
+  console.log(request.body);
   reply.send({ message: "Call status received" });
 });
 
@@ -231,5 +228,5 @@ fastify.listen({ port: PORT }, (err) => {
     console.error("Error starting server:", err);
     process.exit(1);
   }
-  console.log(` Listening on port ${PORT}`);
+  console.log(`Listening on port ${PORT}`);
 });
