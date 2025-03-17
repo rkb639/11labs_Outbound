@@ -36,13 +36,21 @@ fastify.get("/", async (_, reply) => {
   reply.send({ message: "Server is running" });
 });
 
-// Route to handle incoming calls from Twilio
+// Route to handle incoming calls from Twilio, now including lead details in the query parameters
 fastify.all("/incoming-call-eleven", async (request, reply) => {
-  // Generate TwiML response to connect the call to a WebSocket stream
+  // Get the lead details from query parameters if provided
+  const { name, email, phone } = request.query;
+  const params = new URLSearchParams();
+  if (name) params.append("name", name);
+  if (email) params.append("email", email);
+  if (phone) params.append("phone", phone);
+
+  const queryString = params.toString();
+  // Generate TwiML response to connect the call to a WebSocket stream with query parameters
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
     <Response>
       <Connect>
-        <Stream url="wss://${request.headers.host}/media-stream" />
+        <Stream url="wss://${request.headers.host}/media-stream${queryString ? "?" + queryString : ""}" />
       </Connect>
     </Response>`;
 
@@ -53,12 +61,23 @@ fastify.all("/incoming-call-eleven", async (request, reply) => {
 fastify.register(async (fastifyInstance) => {
   fastifyInstance.get("/media-stream", { websocket: true }, (connection, req) => {
     console.info("[Server] Twilio connected to media stream.");
+    // Extract lead details from query parameters
+    const { name, email, phone } = req.query;
+    console.log("Lead details received:", { name, email, phone });
 
     let streamSid = null;
 
-    // Connect to ElevenLabs Conversational AI WebSocket
+    // Build query parameters for ElevenLabs WebSocket
+    const elevenParams = new URLSearchParams({
+      agent_id: ELEVENLABS_AGENT_ID,
+      ...(name && { name }),
+      ...(email && { email }),
+      ...(phone && { phone })
+    });
+
+    // Connect to ElevenLabs Conversational AI WebSocket with lead details
     const elevenLabsWs = new WebSocket(
-      `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${ELEVENLABS_AGENT_ID}`
+      `wss://api.elevenlabs.io/v1/convai/conversation?${elevenParams.toString()}`
     );
 
     elevenLabsWs.on("open", () => {
@@ -155,16 +174,16 @@ fastify.register(async (fastifyInstance) => {
 
 // Route to initiate an outbound call with additional user information
 fastify.post("/make-outbound-call", async (request, reply) => {
-  const { to, name, email } = request.body; // Destination phone number, user name, and email
+  const { to, name, email, phone } = request.body; // Destination phone number, user name, email, and phone
 
   // Validate that all required fields are provided
-  if (!to || !name || !email) {
-    return reply.status(400).send({ error: "Destination phone number, name, and email are required" });
+  if (!to || !name || !email || !phone) {
+    return reply.status(400).send({ error: "Destination phone number, name, email, and phone are required" });
   }
 
   try {
-    // Append name and email as query parameters to the webhook URL
-    const callWebhookUrl = `https://${request.headers.host}/incoming-call-eleven?name=${encodeURIComponent(name)}&email=${encodeURIComponent(email)}`;
+    // Append name, email, and phone as query parameters to the webhook URL
+    const callWebhookUrl = `https://${request.headers.host}/incoming-call-eleven?name=${encodeURIComponent(name)}&email=${encodeURIComponent(email)}&phone=${encodeURIComponent(phone)}`;
     
     const call = await twilioClient.calls.create({
       url: callWebhookUrl, // Webhook for call handling with additional user info
@@ -172,7 +191,7 @@ fastify.post("/make-outbound-call", async (request, reply) => {
       from: TWILIO_PHONE_NUMBER,
     });
 
-    console.log(`[Twilio] Outbound call initiated: ${call.sid} for ${name} (${email})`);
+    console.log(`[Twilio] Outbound call initiated: ${call.sid} for ${name} (${email}, ${phone})`);
     reply.send({ message: "Call initiated", callSid: call.sid });
   } catch (error) {
     console.error("[Twilio] Error initiating call:", error);
