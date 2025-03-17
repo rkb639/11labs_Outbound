@@ -36,20 +36,14 @@ fastify.get("/", async (_, reply) => {
   reply.send({ message: "Server is running" });
 });
 
-// Route to handle incoming calls from Twilio,
-// including lead details (name, email, phone) as query parameters.
+// Route to handle incoming calls from Twilio.
+// We no longer pass extra lead details to ElevenLabs here.
 fastify.all("/incoming-call-eleven", async (request, reply) => {
-  const { name, email, phone } = request.query;
-  const params = new URLSearchParams();
-  if (name) params.append("name", name);
-  if (email) params.append("email", email);
-  if (phone) params.append("phone", phone);
-  const queryString = params.toString();
-
+  // Instead of including extra query parameters, only use what's needed by Twilio.
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
   <Response>
     <Connect>
-      <Stream url="wss://${request.headers.host}/media-stream${queryString ? "?" + queryString : ""}" />
+      <Stream url="wss://${request.headers.host}/media-stream" />
     </Connect>
   </Response>`;
 
@@ -60,27 +54,30 @@ fastify.all("/incoming-call-eleven", async (request, reply) => {
 fastify.register(async (fastifyInstance) => {
   fastifyInstance.get("/media-stream", { websocket: true }, (connection, req) => {
     console.info("[Server] Twilio connected to media stream.");
-    // Extract lead details from query parameters
-    const { name, email, phone } = req.query;
-    console.log("Lead details received:", { name, email, phone });
 
     let streamSid = null;
 
-    // Build query parameters for ElevenLabs using the expected parameter names
+    // Connect to ElevenLabs Conversational AI WebSocket with only the agent_id.
     const elevenParams = new URLSearchParams({
-      agent_id: ELEVENLABS_AGENT_ID,
-      ...(name && { lead_name: name }),
-      ...(email && { lead_email: email }),
-      ...(phone && { lead_phone: phone })
+      agent_id: ELEVENLABS_AGENT_ID
     });
 
-    // Connect to ElevenLabs Conversational AI WebSocket with lead details
     const elevenLabsWs = new WebSocket(
       `wss://api.elevenlabs.io/v1/convai/conversation?${elevenParams.toString()}`
     );
 
     elevenLabsWs.on("open", () => {
       console.log("[II] Connected to Conversational AI.");
+
+      // Optionally, after connection, you can send a message with lead details.
+      // Example:
+      // const leadInfo = {
+      //   type: "lead_info",
+      //   name: req.query.name,
+      //   email: req.query.email,
+      //   phone: req.query.phone
+      // };
+      // elevenLabsWs.send(JSON.stringify(leadInfo));
     });
 
     elevenLabsWs.on("message", (data) => {
@@ -171,21 +168,19 @@ fastify.register(async (fastifyInstance) => {
   });
 });
 
-// Route to initiate an outbound call with additional user information.
-// The lead details are appended as query parameters to the webhook URL.
-// The "to" field now serves as both the destination phone and the lead phone.
+// Route to initiate an outbound call with user information.
+// "to" is used for dialing and as the lead phone number.
 fastify.post("/make-outbound-call", async (request, reply) => {
-  const { to, name, email } = request.body; // "to" is used as the phone number
+  const { to, name, email } = request.body;
 
   if (!to || !name || !email) {
     return reply.status(400).send({ error: "Destination phone number, name, and email are required" });
   }
 
-  // Use the "to" field as the phone number for lead details.
-  const phone = to;
-
   try {
-    const callWebhookUrl = `https://${request.headers.host}/incoming-call-eleven?name=${encodeURIComponent(name)}&email=${encodeURIComponent(email)}&phone=${encodeURIComponent(phone)}`;
+    // We now pass lead details only as query parameters to Twilio,
+    // but not to the ElevenLabs connection.
+    const callWebhookUrl = `https://${request.headers.host}/incoming-call-eleven?name=${encodeURIComponent(name)}&email=${encodeURIComponent(email)}&phone=${encodeURIComponent(to)}`;
     
     const call = await twilioClient.calls.create({
       url: callWebhookUrl,
@@ -193,7 +188,7 @@ fastify.post("/make-outbound-call", async (request, reply) => {
       from: TWILIO_PHONE_NUMBER,
     });
 
-    console.log(`[Twilio] Outbound call initiated: ${call.sid} for ${name} (${email}, ${phone})`);
+    console.log(`[Twilio] Outbound call initiated: ${call.sid} for ${name} (${email}, ${to})`);
     reply.send({ message: "Call initiated", callSid: call.sid });
   } catch (error) {
     console.error("[Twilio] Error initiating call:", error);
