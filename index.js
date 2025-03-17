@@ -153,22 +153,26 @@ fastify.register(async (fastifyInstance) => {
   });
 });
 
-// Route to initiate an outbound call
+// Route to initiate an outbound call with additional user information
 fastify.post("/make-outbound-call", async (request, reply) => {
-  const { to } = request.body; // Destination phone number
+  const { to, name, email } = request.body; // Destination phone number, user name, and email
 
-  if (!to) {
-    return reply.status(400).send({ error: "Destination phone number is required" });
+  // Validate that all required fields are provided
+  if (!to || !name || !email) {
+    return reply.status(400).send({ error: "Destination phone number, name, and email are required" });
   }
 
   try {
+    // Append name and email as query parameters to the webhook URL
+    const callWebhookUrl = `https://${request.headers.host}/incoming-call-eleven?name=${encodeURIComponent(name)}&email=${encodeURIComponent(email)}`;
+    
     const call = await twilioClient.calls.create({
-      url: `https://${request.headers.host}/incoming-call-eleven`, // Webhook for call handling
+      url: callWebhookUrl, // Webhook for call handling with additional user info
       to: to,
       from: TWILIO_PHONE_NUMBER,
     });
 
-    console.log(`[Twilio] Outbound call initiated: ${call.sid}`);
+    console.log(`[Twilio] Outbound call initiated: ${call.sid} for ${name} (${email})`);
     reply.send({ message: "Call initiated", callSid: call.sid });
   } catch (error) {
     console.error("[Twilio] Error initiating call:", error);
@@ -177,7 +181,7 @@ fastify.post("/make-outbound-call", async (request, reply) => {
 });
 
 // Start the Fastify server
-fastify.listen({ port: PORT, host: '0.0.0.0'}, (err) => {
+fastify.listen({ port: PORT, host: "0.0.0.0" }, (err) => {
   if (err) {
     console.error("Error starting server:", err);
     process.exit(1);
